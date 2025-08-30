@@ -1,0 +1,116 @@
+#include <WiFi.h>
+#include <ESP32Servo.h>
+#include <HTTPClient.h>  // HTTP client for making requests
+
+// Pin configuration
+const int gasAnalogPin = 34;  // GPIO34 for gas sensor AO
+const int relayPin = 4;       // GPIO4 for relay module
+const int servoPin = 13;      // GPIO13 for servo motor
+const int buzzerPin = 27;     // GPIO27 for buzzer
+const int ledPin = 2;         // GPIO2 for LED
+
+// Wi-Fi credentials
+const char* ssid = "YOUR_WIFI_NAME";
+const char* password = "YOUR_WIFI_PASSWORD";
+
+// Zapier / Webhook URLs
+const char* highAlertURL = "https://hooks.zapier.com/hooks/catch/XXXXXX/high/";
+const char* normalAlertURL = "https://hooks.zapier.com/hooks/catch/XXXXXX/normal/";
+
+// Threshold value
+const int thresholdValue = 1000;
+
+// Servo motor object
+Servo gasValveServo;
+
+// State tracking
+bool gasAlertSent = false;
+bool gasNormalSent = false;
+
+void setup() {
+  Serial.begin(115200);
+
+  pinMode(relayPin, OUTPUT);
+  pinMode(buzzerPin, OUTPUT);
+  pinMode(ledPin, OUTPUT);
+
+  digitalWrite(relayPin, LOW);
+  digitalWrite(buzzerPin, LOW);
+  digitalWrite(ledPin, LOW);
+
+  gasValveServo.attach(servoPin, 500, 2500);
+  gasValveServo.write(0); // Valve open position
+
+  connectToWiFi();
+}
+
+void connectToWiFi() {
+  Serial.print("Connecting to Wi-Fi...");
+  WiFi.begin(ssid, password);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(1000);
+    Serial.print(".");
+  }
+  Serial.println("\nConnected to Wi-Fi");
+}
+
+void sendHttpAlert(const char* url, const String& message) {
+  if (WiFi.status() == WL_CONNECTED) {
+    HTTPClient http;
+    http.begin(url);
+    http.addHeader("Content-Type", "application/json");
+
+    int httpResponseCode = http.POST(message);
+
+    if (httpResponseCode > 0) {
+      Serial.print("HTTP Response code: ");
+      Serial.println(httpResponseCode);
+    } else {
+      Serial.print("Error sending request: ");
+      Serial.println(http.errorToString(httpResponseCode).c_str());
+    }
+    http.end();
+  } else {
+    Serial.println("Wi-Fi not connected.");
+  }
+}
+
+void loop() {
+  int gasValue = analogRead(gasAnalogPin);
+  Serial.print("Gas Sensor Value: ");
+  Serial.println(gasValue);
+
+  if (gasValue > thresholdValue) {
+    digitalWrite(relayPin, HIGH);
+    digitalWrite(buzzerPin, HIGH);
+    digitalWrite(ledPin, HIGH);
+    gasValveServo.write(90);
+
+    Serial.println("⚠️ Gas Leak Detected!");
+
+    String highGasMessage = "{\"value1\":\"Gas level high!\",\"value2\":\"Reading: " + String(gasValue) + "\"}";
+
+    if (!gasAlertSent) {
+      sendHttpAlert(highAlertURL, highGasMessage);
+      gasAlertSent = true;
+      gasNormalSent = false;
+    }
+  } else {
+    digitalWrite(relayPin, LOW);
+    digitalWrite(buzzerPin, LOW);
+    digitalWrite(ledPin, LOW);
+    gasValveServo.write(0);
+
+    Serial.println("✅ Gas Level Safe.");
+
+    String lowGasMessage = "{\"value1\":\"All good.\",\"value2\":\"Reading: " + String(gasValue) + "\"}";
+
+    if (!gasNormalSent) {
+      sendHttpAlert(normalAlertURL, lowGasMessage);
+      gasNormalSent = true;
+      gasAlertSent = false;
+    }
+  }
+
+  delay(1000);
+}
